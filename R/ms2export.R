@@ -96,8 +96,8 @@ generateSIRIUSmgf <- function(fGroups = fGroups, mslists = mslists, polarity = c
   for (this_group in groups_list) {
     feature_row <- dataTable[dataTable$peak_ID == this_group, ]
     peaks_subset <- resultsmslists[resultsmslists$group == this_group, ]
-    MS1peaks <- peaks_subset[type == "MS", .(mz, intensity)]
-    MS2peaks <- peaks_subset[type == "MSMS", .(mz, intensity)]
+    MS1peaks <- peaks_subset[peaks_subset$type == "MS", c("mz", "intensity")]
+    MS2peaks <- peaks_subset[peaks_subset$type == "MSMS", c("mz", "intensity")]
     
     ret <- round(feature_row$rtmed, 2)
     mz <- round(feature_row$mzmed, 4)
