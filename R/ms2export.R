@@ -76,52 +76,88 @@ generateGNPSInfo <- function(fGroups = fGroups, mslists = mslists, polarity = c(
 #' @return The file path to the generated MGF file for SIRIUS.
 #' @importFrom xcms featureDefinitions featureValues
 #' @importFrom patRoon as.data.table
+#' @import data.table
 #' @export
 generateSIRIUSmgf <- function(fGroups = fGroups, mslists = mslists, polarity = c("positive", "negative"), path) {
-  # Generate feature table
-  featuresDef <- featureDefinitions(fGroups@xdata)
-  featuresIntensities <- featureValues(fGroups@xdata, value = "into")
+  library(data.table)
+  
+  # Match polarity argument safely
+  polarity <- match.arg(polarity)
+  charge_str <- if (polarity == "positive") "1+" else "1-"
+  
+  # 1. Efficiently generate and format the feature data table
+  featuresDef <- as.data.table(xcms::featureDefinitions(fGroups@xdata))
+  featuresIntensities <- xcms::featureValues(fGroups@xdata, value = "into")
   peakID <- as.character(colnames(fGroups@groups))
   
-  dataTable <- merge(featuresDef, featuresIntensities, by = 0, all = TRUE)
-  dataTable <- dataTable[, !(colnames(dataTable) %in% c("peakidx"))]
-  dataTable$peak_ID <- peakID
+  dataTable <- as.data.table(featuresIntensities)
+  dataTable <- cbind(featuresDef, dataTable)
+  dataTable[, peak_ID := peakID]
   
+  # Keep only the columns we actually need for the loop and set keys for instant lookups
+  feature_lookup <- dataTable[, .(peak_ID, rtmed = round(rtmed, 2), mzmed = round(mzmed, 4))]
+  setkey(feature_lookup, peak_ID)
+  
+  # 2. Process MS lists using data.table splitting
   resultsmslists <- patRoon::as.data.table(mslists)
-  groups_list <- unique(resultsmslists$group)
+  setDT(resultsmslists) # Ensure it's treated as a data.table
   
-  fileConn <- file(paste0(path, "output_sirius.mgf"), "w")
+  # Pre-round columns to vectorize computation before splitting
+  resultsmslists[, mz_str := sprintf("%.6f", mz)]
+  resultsmslists[, int_str := sprintf("%.0f", intensity)]
+  resultsmslists[, peak_line := paste(mz_str, int_str)]
+  
+  # Split the massive list into a named list of data.tables by group (very fast)
+  ms_split <- split(resultsmslists, by = "group", keep.by = FALSE)
+  groups_list <- names(ms_split)
+  
+  # 3. Open file connection
+  out_file <- file.path(path, "output_sirius.mgf")
+  fileConn <- file(out_file, "w")
+  
+  # Write Header
   writeLines(paste0("COM=Exported by ", Sys.getenv("USERNAME"), " on ", format(Sys.time(), "%d%m%y %H%M")), fileConn)
   
+  # 4. Process efficiently group by group
   for (this_group in groups_list) {
-    feature_row <- dataTable[dataTable$peak_ID == this_group, ]
-    peaks_subset <- resultsmslists[resultsmslists$group == this_group, ]
-    MS1peaks <- peaks_subset[peaks_subset$type == "MS", c("mz", "intensity")]
-    MS2peaks <- peaks_subset[peaks_subset$type == "MSMS", c("mz", "intensity")]
+    # Instant O(1) key-based lookup for features
+    f_row <- feature_lookup[.(this_group)]
+    if (nrow(f_row) == 0 || is.na(f_row$mzmed)) next
     
-    ret <- round(feature_row$rtmed, 2)
-    mz <- round(feature_row$mzmed, 4)
+    peaks_subset <- ms_split[[this_group]]
     
-    # MS1 Block
-    writeLines(c("BEGIN IONS",
-                 paste0("FEATURE_ID=", this_group),
-                 paste0("PEPMASS=", mz),
-                 "MSLEVEL=1",
-                 paste0("RTINSECONDS=", ret),
-                 paste0("CHARGE=", ifelse(polarity == "positive", "1+", "1-")),
-                 apply(MS1peaks, 1, function(x) paste(round(x[1], 6), round(x[2], 0), sep = " ")),
-                 "END IONS", ""), fileConn)
+    # Separate MS1 and MS2 peak text lines using vector indexing
+    ms1_lines <- peaks_subset[type == "MS", peak_line]
+    ms2_lines <- peaks_subset[type == "MSMS", peak_line]
     
-    # MS2 Block
-    writeLines(c("BEGIN IONS",
-                 paste0("FEATURE_ID=", this_group),
-                 paste0("PEPMASS=", mz),
-                 "MSLEVEL=2",
-                 paste0("RTINSECONDS=", ret),
-                 paste0("CHARGE=", ifelse(polarity == "positive", "1+", "1-")),
-                 apply(MS2peaks, 1, function(x) paste(round(x[1], 6), round(x[2], 0), sep = " ")),
-                 "END IONS", ""), fileConn)
+    # Construct MS1 Block
+    ms1_block <- c(
+      "BEGIN IONS",
+      paste0("FEATURE_ID=", this_group),
+      paste0("PEPMASS=", f_row$mzmed),
+      "MSLEVEL=1",
+      paste0("RTINSECONDS=", f_row$rtmed),
+      paste0("CHARGE=", charge_str),
+      ms1_lines,
+      "END IONS", ""
+    )
+    
+    # Construct MS2 Block
+    ms2_block <- c(
+      "BEGIN IONS",
+      paste0("FEATURE_ID=", this_group),
+      paste0("PEPMASS=", f_row$mzmed),
+      "MSLEVEL=2",
+      paste0("RTINSECONDS=", f_row$rtmed),
+      paste0("CHARGE=", charge_str),
+      ms2_lines,
+      "END IONS", ""
+    )
+    
+    # Single write operation per group
+    writeLines(c(ms1_block, ms2_block), fileConn)
   }
   
   close(fileConn)
+  return(out_file)
 }
