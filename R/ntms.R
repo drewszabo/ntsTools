@@ -135,7 +135,7 @@ export_neatms <- function(fGroups = fGroupsXCMS, csv_path = "aligned_feature_tab
 #' @param yaml_path The file path where the YAML file for removal of noisy features will be saved (default is "model_session.yml").
 #' @return A dataframe summarizing feature quality by group, which is also saved as a CSV file for further analysis.
 #' @importFrom dplyr left_join group_by summarise filter distinct select rename
-#' @importFrom yaml as.yaml write
+#' @importFrom yaml as.yaml write_yaml
 #' @importFrom patRoon as.data.table
 #' @export
 import_neatms <- function(ntms_results = "ntms_export.csv", anaInfo = anaInfo, feature_dataframe = feature_dataframe, yaml_path = "model_session.yml"){
@@ -215,6 +215,6 @@ list <- append(list, featureGroups)
 yaml_object <- as.yaml(list)
 
 # Write the YAML object to a file
-write(yaml_object, file = yaml_path)
+write_yaml(yaml_object, file = yaml_path)
 
 }
